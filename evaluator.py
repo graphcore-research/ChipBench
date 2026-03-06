@@ -38,7 +38,20 @@ async def evaluate(sample: Sample) -> EvalResult:
         sample_file.write_text(code)
 
         # Compile with iverilog
-        compile_cmd = f"iverilog -Wall -Winfloop -Wno-timescale -g2012 -s tb -o test.vvp {sample_file} {test_file} {ref_file}"
+        compile_cmd = [
+            "iverilog",
+            "-Wall",
+            "-Winfloop",
+            "-Wno-timescale",
+            "-g2012",
+            "-s",
+            "tb",
+            "-o",
+            "test.vvp",
+            str(test_file), 
+            str(ref_file), 
+            str(sample_file)
+        ]
         completed, compile_output = await run_with_timeout(
             compile_cmd, timeout=30, cwd=tmp_dir
         )
