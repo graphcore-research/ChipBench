@@ -22,8 +22,46 @@ async def evaluate(sample: Sample) -> EvalResult:
 
     # Extract code from between [BEGIN] and [DONE] markers if present
     code = sample.code
-    if "[BEGIN]" in code and "[DONE]" in code:
-        code = code.split("[BEGIN]", 1)[1].split("[DONE]", 1)[0].strip()
+    marker_pairs = [
+        ("[BEGIN]", "[DONE]"),
+        ("[BEGIN]", "[END]"),
+        ("[ BEGIN ]", "[ DONE ]"),
+        ("[ BEGIN ]", "[ END ]"),
+    ]
+    for begin_marker, end_marker in marker_pairs:
+        if begin_marker in code and end_marker in code:
+            code = code.split(begin_marker, 1)[1].split(end_marker, 1)[0].strip()
+            break
+    
+    if '```verilog' in code or '```systemverilog' in code or '```' in code:
+        # Find the first verilog code block
+        for fence in ['```verilog', '```systemverilog', '```']:
+            if fence in code:
+                # Split at the opening fence
+                parts = code.split(fence, 1)
+                if len(parts) >= 2:
+                    # Everything after the opening fence
+                    after_fence = parts[1]
+                    # Remove leading language tag line if present
+                    if after_fence.startswith("\n"):
+                        after_fence = after_fence[1:]
+                    if after_fence.startswith("verilog\n"):
+                        after_fence = after_fence[len("verilog\n"):]
+                    elif after_fence.startswith("systemverilog\n"):
+                        after_fence = after_fence[len("systemverilog\n"):]
+
+                    # Find the closing fence
+                    if '```' in after_fence:
+                        code = after_fence.split('```', 1)[0].strip()
+                        break
+
+    # Fallback: if no markers were used, try extracting module...endmodule blocks
+    # instead of compiling raw full text
+    if "module" in code and "endmodule" in code:
+        module_blocks = re.findall(r'\bmodule\b[\s\S]*?\bendmodule\b', code)
+        if module_blocks:
+            code = "\n\n".join(block.strip() for block in module_blocks).strip()
+
 
     problem_dir = _PROBLEMS[sample.problem]
     test_file = problem_dir / f"{sample.problem}_test.sv"
