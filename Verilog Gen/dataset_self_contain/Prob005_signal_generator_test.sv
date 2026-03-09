@@ -92,7 +92,7 @@ module tb();
 	TopModule top_module1 (
 		.clk,
 		.rst_n,
-		.wave_choice,
+		.wave_choise(wave_choice),
 		.wave(wave_dut) );
 	// === End your code here ===
 
