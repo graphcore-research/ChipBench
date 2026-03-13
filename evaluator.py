@@ -121,9 +121,21 @@ async def evaluate(sample: Sample) -> EvalResult:
             )
 
         # Parse simulation output
-        match = re.search(r"Mismatches: (\d+) in (\d+) samples", sim_output)
+        match = re.search(
+            r"(?:Mismatches:\s*(?P<m1>\d+)\s*in\s*(?P<t1>\d+)\s*samples)"
+            r"|(?:Total\s+mismatched\s+samples\s+is\s*(?P<m2>\d+)\s*out\s+of\s*(?P<t2>\d+)\s*samples\.?)"
+            r"|(?P<no_mismatch>(?:Hint:\s*)?No\s+mismatched\s+samples\.?)",
+            sim_output,
+            flags=re.IGNORECASE,
+        )
+
         if match:
-            mismatches, total = int(match.group(1)), int(match.group(2))
+            if match.group("no_mismatch"):
+                mismatches = 0
+                total = 0
+            else:
+                mismatches = int(match.group("m1") or match.group("m2"))
+                total = int(match.group("t1") or match.group("t2"))
             passed = mismatches == 0
             reason = "passed" if passed else f"{mismatches}/{total} mismatches"
         else:

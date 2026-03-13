@@ -11,9 +11,9 @@ SYSTEM_PROMPT = (
 )
 
 
-class ChipBenchEvalSet:
+class ChipBenchEvalSetCpu:
     def get_problems(self) -> Iterable[Problem]:
-        all_problems_files = _DATASET_DIR.glob("**/problems.txt")
+        all_problems_files = _DATASET_DIR.glob("dataset_cpu_ip/problems.txt")
         for problems_file in all_problems_files:
             for line in problems_file.read_text().splitlines():
                 problem_name = line.strip()
@@ -31,7 +31,61 @@ class ChipBenchEvalSet:
     Answer:"""
 
                 yield Problem(
-                    eval_set="chipbench",
+                    eval_set="chipbench_cpu_ip",
+                    name=problem_name,
+                    system_prompt=SYSTEM_PROMPT,
+                    user_prompt=user_prompt,
+                )
+
+
+class ChipBenchEvalSetNoSF:
+    def get_problems(self) -> Iterable[Problem]:
+        all_problems_files = _DATASET_DIR.glob("dataset_not_self_contain/problems.txt")
+        for problems_file in all_problems_files:
+            for line in problems_file.read_text().splitlines():
+                problem_name = line.strip()
+                if not problem_name:
+                    continue
+
+                prompt_file = problems_file.parent / f"{problem_name}_prompt.txt"
+                spec = prompt_file.read_text()
+
+                user_prompt = f"""Question:
+    {spec}
+
+    Enclose your code with [BEGIN] and [DONE]. Only output the code snippet and do NOT output anything else.
+
+    Answer:"""
+
+                yield Problem(
+                    eval_set="chipbench_not_self_contained",
+                    name=problem_name,
+                    system_prompt=SYSTEM_PROMPT,
+                    user_prompt=user_prompt,
+                )
+
+
+class ChipBenchEvalSetSF:
+    def get_problems(self) -> Iterable[Problem]:
+        all_problems_files = _DATASET_DIR.glob("dataset_self_contain/problems.txt")
+        for problems_file in all_problems_files:
+            for line in problems_file.read_text().splitlines():
+                problem_name = line.strip()
+                if not problem_name:
+                    continue
+
+                prompt_file = problems_file.parent / f"{problem_name}_prompt.txt"
+                spec = prompt_file.read_text()
+
+                user_prompt = f"""Question:
+    {spec}
+
+    Enclose your code with [BEGIN] and [DONE]. Only output the code snippet and do NOT output anything else.
+
+    Answer:"""
+
+                yield Problem(
+                    eval_set="chipbench_self_contained",
                     name=problem_name,
                     system_prompt=SYSTEM_PROMPT,
                     user_prompt=user_prompt,
