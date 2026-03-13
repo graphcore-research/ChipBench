@@ -220,7 +220,7 @@ module tb();
 		end
 	endtask
 
-	initial stats1 = '{default:0};
+	initial stats1 = '0;
 
 	final begin
 		// === Start your code here ===

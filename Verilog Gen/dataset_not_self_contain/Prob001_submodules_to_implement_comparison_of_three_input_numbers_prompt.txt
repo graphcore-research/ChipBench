@@ -25,3 +25,8 @@ determine the minimum value among a, b, and c.
 
 The rst_n signal is an active-low asynchronous reset signal. Assume all
 sequential logic is triggered on the positive edge of the clock.
+
+Timing requirement:
+- Implement the comparator submodule as sequential logic with async active-low reset.
+- In TopModule, register c before the second comparison stage.
+- The final output d must have two-cycle latency from input sampling.

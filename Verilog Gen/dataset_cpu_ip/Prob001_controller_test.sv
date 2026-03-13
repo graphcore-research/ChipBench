@@ -189,9 +189,13 @@ module tb();
 	// Use explicit sensitivity list here. @(*) causes NetProc::nex_input() to be called when trying to compute
 	// the sensitivity list of the @(strobe) process, which isn't implemented.
 	always @(posedge clk, negedge clk) begin
+    	wait_for_end_of_timestep();  // sample after combinational settles
 
 		stats1.clocks++;
-		if (!tb_match) begin
+		if (!( { ALUSrc_ref, MemtoReg_ref, RegWrite_ref, MemRead_ref, MemWrite_ref, ALUOp_ref, Branch_ref, JalrSel_ref, RWSel_ref } ===
+           ( { ALUSrc_ref, MemtoReg_ref, RegWrite_ref, MemRead_ref, MemWrite_ref, ALUOp_ref, Branch_ref, JalrSel_ref, RWSel_ref } ^
+             { ALUSrc_dut, MemtoReg_dut, RegWrite_dut, MemRead_dut, MemWrite_dut, ALUOp_dut, Branch_dut, JalrSel_dut, RWSel_dut } ^
+             { ALUSrc_ref, MemtoReg_ref, RegWrite_ref, MemRead_ref, MemWrite_ref, ALUOp_ref, Branch_ref, JalrSel_ref, RWSel_ref } ) )) begin
 			if (stats1.errors == 0) stats1.errortime = $time;
 			stats1.errors++;
 		end
