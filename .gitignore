@@ -14,3 +14,4 @@ Makefile
 *.mk
 summary.*
 *.vcd
+__pycache__/
