@@ -9,9 +9,10 @@ import os
 import pandas as pd
 import sys
 
+
 # Function to process a CSV file and count codes
 def process_csv(directory):
-    file_path = os.path.join(directory, 'summary.csv')
+    file_path = os.path.join(directory, "summary.csv")
     if not os.path.exists(file_path):
         print(f"No summary.csv found in {directory}")
         return {}
@@ -36,42 +37,44 @@ def process_csv(directory):
     # Return the counts dictionary
     return code_counts
 
+
 # Function to print counts for a directory
 def print_counts(directory, code_counts):
     # Calculate total counts across all categories
     total_counts = sum(code_counts.values())
 
     # Print total counts
-    print(f'Total counts across all categories in {directory}: {total_counts}')
+    print(f"Total counts across all categories in {directory}: {total_counts}")
 
     # Sort the code counts by code, with '.' always at the top
     sorted_codes = sorted(code_counts.keys())
-    if '.' in sorted_codes:
-        sorted_codes.remove('.')
-    sorted_codes.insert(0, '.')
+    if "." in sorted_codes:
+        sorted_codes.remove(".")
+    sorted_codes.insert(0, ".")
 
     # Print out the counts of each code with human-readable names
     for code in sorted_codes:
         count = code_counts.get(code, 0)
-        reason = code_to_reason.get(code, 'Unknown Reason')
-        print(f'{code} ({reason}): {count}')
+        reason = code_to_reason.get(code, "Unknown Reason")
+        print(f"{code} ({reason}): {count}")
+
 
 # Mapping of codes to human-readable names
 code_to_reason = {
-    '.': 'Pass',
-    'S': 'Syntax Error',
-    'e': 'Explicit Cast Required',
-    '0': 'Sized Numeric Constant Error',
-    'n': 'No Sensitivities Warning',
-    'w': 'Declared as Wire',
-    'm': 'Unknown Module Type',
-    'p': 'Unable to Bind Wire/Reg',
-    'c': 'Unable to Bind Wire/Reg `clk`',
-    'T': 'Timeout',
-    '.': 'No Mismatches',
-    'r': 'Async reset found',
-    'C': 'Compiler error',
-    'R': 'Runtime error'
+    ".": "Pass",
+    "S": "Syntax Error",
+    "e": "Explicit Cast Required",
+    "0": "Sized Numeric Constant Error",
+    "n": "No Sensitivities Warning",
+    "w": "Declared as Wire",
+    "m": "Unknown Module Type",
+    "p": "Unable to Bind Wire/Reg",
+    "c": "Unable to Bind Wire/Reg `clk`",
+    "T": "Timeout",
+    ".": "No Mismatches",
+    "r": "Async reset found",
+    "C": "Compiler error",
+    "R": "Runtime error",
 }
 
 
@@ -96,16 +99,20 @@ if __name__ == "__main__":
 
     # Sort codes with '.' at the top
     sorted_codes = sorted(all_codes)
-    if '.' in sorted_codes:
-        sorted_codes.remove('.')
-    sorted_codes.insert(0, '.')
+    if "." in sorted_codes:
+        sorted_codes.remove(".")
+    sorted_codes.insert(0, ".")
 
-    sorted_codes = [code for code in sorted_codes if code not in ['r', 'R', 'T']] + ['r', 'R', 'T']
+    sorted_codes = [code for code in sorted_codes if code not in ["r", "R", "T"]] + [
+        "r",
+        "R",
+        "T",
+    ]
 
     # Create rows for the summary DataFrame
     for code in sorted_codes:
-        reason = code_to_reason.get(code, 'Unknown Reason')
-        row = {'Code': f'{code} ({reason})'}
+        reason = code_to_reason.get(code, "Unknown Reason")
+        row = {"Code": f"{code} ({reason})"}
         for directory, counts in all_counts.items():
             row[directory] = counts.get(code, 0)
         summary_data.append(row)
@@ -116,4 +123,3 @@ if __name__ == "__main__":
     # Print summary in CSV format
     print("\nSummary in CSV format:")
     print(summary_df.to_csv(index=False))
-

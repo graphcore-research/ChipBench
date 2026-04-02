@@ -32,27 +32,27 @@ def extract_ports_from_verilog(verilog_path):
     Extract input and output port information from Verilog file.
     Returns (inputs, outputs) where each is a list of (name, width) tuples.
     """
-    with open(verilog_path, 'r') as f:
+    with open(verilog_path, "r") as f:
         verilog_code = f.read()
-    
+
     # Remove comments
-    verilog_code = re.sub(r'//[^\n]*', '', verilog_code)
-    verilog_code = re.sub(r'/\*[\s\S]*?\*/', '', verilog_code)
-    
+    verilog_code = re.sub(r"//[^\n]*", "", verilog_code)
+    verilog_code = re.sub(r"/\*[\s\S]*?\*/", "", verilog_code)
+
     inputs = []
     outputs = []
-    
+
     # Pattern: input/output [MSB:LSB] name
-    port_pattern = r'(input|output)\s*(?:reg|wire|logic)?\s*(?:\[([^\]]+)\])?\s*(\w+)'
-    
+    port_pattern = r"(input|output)\s*(?:reg|wire|logic)?\s*(?:\[([^\]]+)\])?\s*(\w+)"
+
     for match in re.finditer(port_pattern, verilog_code):
         direction = match.group(1)
         width_expr = match.group(2)
         name = match.group(3)
-        
+
         # Calculate width
         if width_expr:
-            parts = width_expr.split(':')
+            parts = width_expr.split(":")
             if len(parts) == 2:
                 msb_expr = parts[0].strip()
                 lsb_expr = parts[1].strip()
@@ -66,18 +66,18 @@ def extract_ports_from_verilog(verilog_path):
                 width = 1
         else:
             width = 1
-        
-        if direction == 'input':
+
+        if direction == "input":
             inputs.append((name, width))
         else:
             outputs.append((name, width))
-    
+
     return inputs, outputs
 
 
 def cxxrtl_mangle(name):
     """Convert Verilog signal name to CXXRTL mangled name."""
-    return 'p_' + name.replace('_', '__')
+    return "p_" + name.replace("_", "__")
 
 
 def get_num_chunks(width):
@@ -88,10 +88,10 @@ def get_num_chunks(width):
 def generate_wide_input_code(name, width):
     """Generate code for handling wide input signals (> 64 bits)."""
     num_chunks = get_num_chunks(width)
-    
+
     # Declaration: array of uint32_t
     decl = f"    uint32_t {name}[{num_chunks}];"
-    
+
     # Random generation: fill each chunk
     rand_lines = []
     for i in range(num_chunks):
@@ -104,32 +104,32 @@ def generate_wide_input_code(name, width):
                 rand_lines.append(f"        {name}[{i}] = dist32(gen);")
         else:
             rand_lines.append(f"        {name}[{i}] = dist32(gen);")
-    rand_code = '\n'.join(rand_lines)
-    
+    rand_code = "\n".join(rand_lines)
+
     # Setter for Verilator (ref and dut): copy to VlWide
     ref_setter = f"        for (int _i = 0; _i < {num_chunks}; _i++) ref->{name}[_i] = {name}[_i];"
     dut_setter = f"        for (int _i = 0; _i < {num_chunks}; _i++) dut->{name}[_i] = {name}[_i];"
-    
+
     # Setter for CXXRTL: directly set the data array
     # Note: CXXRTL inputs are value<Bits> (use .data directly), not wire<Bits>
     mangled = cxxrtl_mangle(name)
     cxxrtl_setter = f"        for (int _i = 0; _i < {num_chunks}; _i++) cxxrtl_dut.{mangled}.data[_i] = {name}[_i];"
-    
+
     # To string for JSON
-    to_string = f'''[&]() {{
+    to_string = f"""[&]() {{
             std::vector<uint32_t> chunks({num_chunks});
             for (int _i = 0; _i < {num_chunks}; _i++) chunks[_i] = {name}[_i];
             return wide_to_string(chunks);
-        }}()'''
-    
+        }}()"""
+
     return decl, rand_code, ref_setter, dut_setter, cxxrtl_setter, to_string
 
 
 def generate_wide_output_comparison(name, width, module_prefix, error_var, error_label):
     """Generate comparison code for wide output signals."""
     num_chunks = get_num_chunks(width)
-    
-    return f'''
+
+    return f"""
         {{
             bool mismatch = false;
             for (int _i = 0; _i < {num_chunks}; _i++) {{
@@ -141,17 +141,17 @@ def generate_wide_output_comparison(name, width, module_prefix, error_var, error
                 }}
                 {error_var}++;
             }}
-        }}'''
+        }}"""
 
 
 def generate_wide_cxxrtl_comparison(name, width, error_var):
     """Generate comparison code for wide CXXRTL output signals."""
     num_chunks = get_num_chunks(width)
     mangled = cxxrtl_mangle(name)
-    
+
     # Note: CXXRTL outputs in combinational circuits are value<Bits> (use .data directly)
     # For sequential circuits with wires, would need .curr.data
-    return f'''
+    return f"""
         {{
             bool mismatch = false;
             for (int _i = 0; _i < {num_chunks}; _i++) {{
@@ -163,31 +163,48 @@ def generate_wide_cxxrtl_comparison(name, width, error_var):
                 }}
                 {error_var}++;
             }}
-        }}'''
+        }}"""
 
 
 def generate_wide_output_to_string(name, width, module_name="ref"):
     """Generate code to convert wide output to string."""
     num_chunks = get_num_chunks(width)
-    return f'''[&]() {{
+    return f"""[&]() {{
             std::vector<uint32_t> chunks({num_chunks});
             for (int _i = 0; _i < {num_chunks}; _i++) chunks[_i] = {module_name}->{name}[_i];
             return wide_to_string(chunks);
-        }}()'''
+        }}()"""
 
 
-def generate_combinational_testbench(inputs, outputs, cxxrtl_cc, python_module,
-                                     input_declarations, random_generators,
-                                     ref_setters, dut_setters, cxxrtl_setters,
-                                     python_inputs, dut_checks, cxxrtl_checks, python_checks,
-                                     input_to_string, output_to_string, has_wide_signals,
-                                     reset_signals_info):
+def generate_combinational_testbench(
+    inputs,
+    outputs,
+    cxxrtl_cc,
+    python_module,
+    input_declarations,
+    random_generators,
+    ref_setters,
+    dut_setters,
+    cxxrtl_setters,
+    python_inputs,
+    dut_checks,
+    cxxrtl_checks,
+    python_checks,
+    input_to_string,
+    output_to_string,
+    has_wide_signals,
+    reset_signals_info,
+):
     """Generate testbench for COMBINATIONAL circuits (no clk)."""
-    
+
     # Build input/output string conversion code
-    input_str_code = '\n'.join([f'        input_obj["{n}"] = {expr};' for n, expr in input_to_string])
-    output_str_code = '\n'.join([f'        ref_out["{n}"] = {expr};' for n, expr in output_to_string])
-    
+    input_str_code = "\n".join(
+        [f'        input_obj["{n}"] = {expr};' for n, expr in input_to_string]
+    )
+    output_str_code = "\n".join(
+        [f'        ref_out["{n}"] = {expr};' for n, expr in output_to_string]
+    )
+
     # Generate reset warmup code and reset fixed value code
     # reset_signals_info: list of (name, width, is_active_low)
     warmup_reset_code = []
@@ -198,43 +215,70 @@ def generate_combinational_testbench(inputs, outputs, cxxrtl_cc, python_module,
             if is_active_low:
                 # Active-low: warmup=0, fixed=all 1s
                 for i in range(num_chunks):
-                    warmup_reset_code.append(f'            {name}[{i}] = 0;')
+                    warmup_reset_code.append(f"            {name}[{i}] = 0;")
                     if i == num_chunks - 1:
                         remaining = width - (i * 32)
                         if remaining < 32:
-                            fixed_reset_code.append(f'        {name}[{i}] = {(1 << remaining) - 1};')
+                            fixed_reset_code.append(
+                                f"        {name}[{i}] = {(1 << remaining) - 1};"
+                            )
                         else:
-                            fixed_reset_code.append(f'        {name}[{i}] = 0xFFFFFFFF;')
+                            fixed_reset_code.append(
+                                f"        {name}[{i}] = 0xFFFFFFFF;"
+                            )
                     else:
-                        fixed_reset_code.append(f'        {name}[{i}] = 0xFFFFFFFF;')
+                        fixed_reset_code.append(f"        {name}[{i}] = 0xFFFFFFFF;")
             else:
                 # Active-high: warmup=all 1s, fixed=0
                 for i in range(num_chunks):
                     if i == num_chunks - 1:
                         remaining = width - (i * 32)
                         if remaining < 32:
-                            warmup_reset_code.append(f'            {name}[{i}] = {(1 << remaining) - 1};')
+                            warmup_reset_code.append(
+                                f"            {name}[{i}] = {(1 << remaining) - 1};"
+                            )
                         else:
-                            warmup_reset_code.append(f'            {name}[{i}] = 0xFFFFFFFF;')
+                            warmup_reset_code.append(
+                                f"            {name}[{i}] = 0xFFFFFFFF;"
+                            )
                     else:
-                        warmup_reset_code.append(f'            {name}[{i}] = 0xFFFFFFFF;')
-                    fixed_reset_code.append(f'        {name}[{i}] = 0;')
+                        warmup_reset_code.append(
+                            f"            {name}[{i}] = 0xFFFFFFFF;"
+                        )
+                    fixed_reset_code.append(f"        {name}[{i}] = 0;")
         else:
             if is_active_low:
                 # Active-low: warmup=0, fixed=1
-                warmup_reset_code.append(f'            {name} = 0;  // Active-low reset active')
-                fixed_reset_code.append(f'        {name} = 1;  // Active-low reset inactive')
+                warmup_reset_code.append(
+                    f"            {name} = 0;  // Active-low reset active"
+                )
+                fixed_reset_code.append(
+                    f"        {name} = 1;  // Active-low reset inactive"
+                )
             else:
                 # Active-high: warmup=1, fixed=0
-                warmup_reset_code.append(f'            {name} = 1;  // Active-high reset active')
-                fixed_reset_code.append(f'        {name} = 0;  // Active-high reset inactive')
-    
-    warmup_reset_str = '\n'.join(warmup_reset_code) if warmup_reset_code else '            // No reset signals'
-    fixed_reset_str = '\n'.join(fixed_reset_code) if fixed_reset_code else '        // No reset signals'
+                warmup_reset_code.append(
+                    f"            {name} = 1;  // Active-high reset active"
+                )
+                fixed_reset_code.append(
+                    f"        {name} = 0;  // Active-high reset inactive"
+                )
+
+    warmup_reset_str = (
+        "\n".join(warmup_reset_code)
+        if warmup_reset_code
+        else "            // No reset signals"
+    )
+    fixed_reset_str = (
+        "\n".join(fixed_reset_code)
+        if fixed_reset_code
+        else "        // No reset signals"
+    )
     has_reset = len(reset_signals_info) > 0
-    
+
     # Wide signal helper function
-    wide_helper = '''
+    wide_helper = (
+        """
 // Helper to convert wide signal (array of uint32_t) to decimal string
 std::string wide_to_string(const std::vector<uint32_t>& chunks) {
     if (chunks.empty()) return "0";
@@ -265,8 +309,11 @@ std::string wide_to_string(const std::vector<uint32_t>& chunks) {
     size_t start = digits.find_first_not_of('0');
     return (start == std::string::npos) ? "0" : digits.substr(start);
 }
-''' if has_wide_signals else ''
-    
+"""
+        if has_wide_signals
+        else ""
+    )
+
     return f'''// Auto-generated Cross-Language Verification Testbench
 // COMBINATIONAL CIRCUIT (no clock)
 // Tests: RefModule (SV), TopModule (SV), CXXRTL (p_TopModule), Python (TopModule.eval())
@@ -473,7 +520,7 @@ int main(int argc, char** argv) {{
     std::vector<std::map<std::string, std::string>> ref_outputs;
     
     // === WARMUP PHASE: Run 20 cycles with reset ACTIVE (no comparison) ===
-    const int WARMUP_CYCLES = {'20' if has_reset else '0'};
+    const int WARMUP_CYCLES = {"20" if has_reset else "0"};
     std::cout << "Running " << WARMUP_CYCLES << " warmup cycles with reset active..." << std::endl;
     for (int warmup = 0; warmup < WARMUP_CYCLES; warmup++) {{
         // Generate random inputs
@@ -532,9 +579,9 @@ int main(int argc, char** argv) {{
         cxxrtl_dut.eval();
         cxxrtl_dut.commit();
         
-        // Compare DUT vs REF{''.join(dut_checks)}
+        // Compare DUT vs REF{"".join(dut_checks)}
         
-        // Compare CXXRTL vs REF{''.join(cxxrtl_checks)}
+        // Compare CXXRTL vs REF{"".join(cxxrtl_checks)}
     }}
     
     // Run Python batch (TopModule class with eval())
@@ -589,30 +636,48 @@ def is_reset_signal(name):
     """Check if a signal name looks like a reset signal."""
     name_lower = name.lower()
     # Match: reset, rst, areset, async_reset, reset_n, rst_n, etc.
-    return ('reset' in name_lower or 'rst' in name_lower)
+    return "reset" in name_lower or "rst" in name_lower
+
 
 def is_active_low_reset(name):
     """Check if reset is active-low (ends with _n, _b, _l, or starts with n)."""
     name_lower = name.lower()
-    return (name_lower.endswith('_n') or name_lower.endswith('_b') or 
-            name_lower.endswith('_l') or name_lower.startswith('n'))
+    return (
+        name_lower.endswith("_n")
+        or name_lower.endswith("_b")
+        or name_lower.endswith("_l")
+        or name_lower.startswith("n")
+    )
 
 
-def generate_sequential_testbench(inputs, outputs, cxxrtl_cc, python_module,
-                                  input_declarations, random_generators,
-                                  ref_setters, dut_setters, cxxrtl_setters,
-                                  python_inputs, dut_checks, cxxrtl_checks, python_checks,
-                                  input_to_string, output_to_string, has_wide_signals,
-                                  reset_signals_info):
+def generate_sequential_testbench(
+    inputs,
+    outputs,
+    cxxrtl_cc,
+    python_module,
+    input_declarations,
+    random_generators,
+    ref_setters,
+    dut_setters,
+    cxxrtl_setters,
+    python_inputs,
+    dut_checks,
+    cxxrtl_checks,
+    python_checks,
+    input_to_string,
+    output_to_string,
+    has_wide_signals,
+    reset_signals_info,
+):
     """Generate testbench for SEQUENTIAL circuits (with clk)."""
-    
+
     # For sequential, we need to build JSON array of all inputs first
     # then send to Python in one batch
-    input_names = [name for name, _ in inputs if name.lower() != 'clk']
+    input_names = [name for name, _ in inputs if name.lower() != "clk"]
     output_names = [name for name, _ in outputs]
-    
+
     has_reset = len(reset_signals_info) > 0
-    
+
     # Generate warmup code (reset ACTIVE) and fixed reset code (reset INACTIVE)
     # For warmup: generate random inputs, then override reset to active
     warmup_reset_code = []
@@ -623,46 +688,81 @@ def generate_sequential_testbench(inputs, outputs, cxxrtl_cc, python_module,
             if is_active_low:
                 # Active-low: warmup=0 (active), fixed=all 1s (inactive)
                 for i in range(num_chunks):
-                    warmup_reset_code.append(f'            {name}[{i}] = 0;')
+                    warmup_reset_code.append(f"            {name}[{i}] = 0;")
                     if i == num_chunks - 1:
                         remaining = width - (i * 32)
                         if remaining < 32:
-                            fixed_reset_code.append(f'        {name}[{i}] = {(1 << remaining) - 1};')
+                            fixed_reset_code.append(
+                                f"        {name}[{i}] = {(1 << remaining) - 1};"
+                            )
                         else:
-                            fixed_reset_code.append(f'        {name}[{i}] = 0xFFFFFFFF;')
+                            fixed_reset_code.append(
+                                f"        {name}[{i}] = 0xFFFFFFFF;"
+                            )
                     else:
-                        fixed_reset_code.append(f'        {name}[{i}] = 0xFFFFFFFF;')
+                        fixed_reset_code.append(f"        {name}[{i}] = 0xFFFFFFFF;")
             else:
                 # Active-high: warmup=all 1s (active), fixed=0 (inactive)
                 for i in range(num_chunks):
                     if i == num_chunks - 1:
                         remaining = width - (i * 32)
                         if remaining < 32:
-                            warmup_reset_code.append(f'            {name}[{i}] = {(1 << remaining) - 1};')
+                            warmup_reset_code.append(
+                                f"            {name}[{i}] = {(1 << remaining) - 1};"
+                            )
                         else:
-                            warmup_reset_code.append(f'            {name}[{i}] = 0xFFFFFFFF;')
+                            warmup_reset_code.append(
+                                f"            {name}[{i}] = 0xFFFFFFFF;"
+                            )
                     else:
-                        warmup_reset_code.append(f'            {name}[{i}] = 0xFFFFFFFF;')
-                    fixed_reset_code.append(f'        {name}[{i}] = 0;')
+                        warmup_reset_code.append(
+                            f"            {name}[{i}] = 0xFFFFFFFF;"
+                        )
+                    fixed_reset_code.append(f"        {name}[{i}] = 0;")
         else:
             if is_active_low:
                 # Active-low: warmup=0 (active), fixed=1 (inactive)
-                warmup_reset_code.append(f'            {name} = 0;  // Active-low reset ACTIVE')
-                fixed_reset_code.append(f'        {name} = 1;  // Active-low reset INACTIVE')
+                warmup_reset_code.append(
+                    f"            {name} = 0;  // Active-low reset ACTIVE"
+                )
+                fixed_reset_code.append(
+                    f"        {name} = 1;  // Active-low reset INACTIVE"
+                )
             else:
                 # Active-high: warmup=1 (active), fixed=0 (inactive)
-                warmup_reset_code.append(f'            {name} = 1;  // Active-high reset ACTIVE')
-                fixed_reset_code.append(f'        {name} = 0;  // Active-high reset INACTIVE')
-    
-    warmup_reset_str = '\n'.join(warmup_reset_code) if warmup_reset_code else '            // No reset signals'
-    fixed_reset_str = '\n'.join(fixed_reset_code) if fixed_reset_code else '        // No reset signals'
-    
+                warmup_reset_code.append(
+                    f"            {name} = 1;  // Active-high reset ACTIVE"
+                )
+                fixed_reset_code.append(
+                    f"        {name} = 0;  // Active-high reset INACTIVE"
+                )
+
+    warmup_reset_str = (
+        "\n".join(warmup_reset_code)
+        if warmup_reset_code
+        else "            // No reset signals"
+    )
+    fixed_reset_str = (
+        "\n".join(fixed_reset_code)
+        if fixed_reset_code
+        else "        // No reset signals"
+    )
+
     # Build input/output string conversion code
-    input_str_code = '\n'.join([f'        input_obj["{n}"] = {expr};' for n, expr in input_to_string if n.lower() != 'clk'])
-    output_str_code = '\n'.join([f'        ref_out["{n}"] = {expr};' for n, expr in output_to_string])
-    
+    input_str_code = "\n".join(
+        [
+            f'        input_obj["{n}"] = {expr};'
+            for n, expr in input_to_string
+            if n.lower() != "clk"
+        ]
+    )
+    output_str_code = "\n".join(
+        [f'        ref_out["{n}"] = {expr};' for n, expr in output_to_string]
+    )
+
     # Wide signal helper function
-    wide_helper = '''
+    wide_helper = (
+        """
 // Helper to convert wide signal (array of uint32_t) to decimal string
 std::string wide_to_string(const std::vector<uint32_t>& chunks) {
     if (chunks.empty()) return "0";
@@ -693,8 +793,11 @@ std::string wide_to_string(const std::vector<uint32_t>& chunks) {
     size_t start = digits.find_first_not_of('0');
     return (start == std::string::npos) ? "0" : digits.substr(start);
 }
-''' if has_wide_signals else ''
-    
+"""
+        if has_wide_signals
+        else ""
+    )
+
     return f'''// Auto-generated Cross-Language Verification Testbench
 // SEQUENTIAL CIRCUIT (with clock)
 // Tests: RefModule (SV), TopModule (SV), CXXRTL (p_TopModule), Python (TopModule.eval())
@@ -858,7 +961,7 @@ int main(int argc, char** argv) {{
     cxxrtl_dut.commit();
     
     // === WARMUP PHASE: Run 20 clock cycles with reset ACTIVE (no comparison) ===
-    const int WARMUP_CYCLES = {'20' if has_reset else '0'};
+    const int WARMUP_CYCLES = {"20" if has_reset else "0"};
     std::cout << "Running " << WARMUP_CYCLES << " warmup cycles with reset active..." << std::endl;
     for (int warmup = 0; warmup < WARMUP_CYCLES; warmup++) {{
         // Generate random inputs
@@ -933,9 +1036,9 @@ int main(int argc, char** argv) {{
         
         // Compare DUT vs REF (use cycle as i)
         int i = cycle;
-        (void)i;  // Suppress unused warning{''.join(dut_checks)}
+        (void)i;  // Suppress unused warning{"".join(dut_checks)}
         
-        // Compare CXXRTL vs REF{''.join(cxxrtl_checks)}
+        // Compare CXXRTL vs REF{"".join(cxxrtl_checks)}
         
         // === NEGEDGE: clk 1 -> 0 ===
         clk = 0;
@@ -1002,10 +1105,10 @@ def generate_testbench_cpp(inputs, outputs, cxxrtl_cc, python_module):
     Handles both combinational and sequential (clocked) circuits.
     Supports arbitrary signal widths (including > 64 bits).
     """
-    
-    has_clk = any(name.lower() == 'clk' for name, _ in inputs)
+
+    has_clk = any(name.lower() == "clk" for name, _ in inputs)
     has_wide_signals = any(w > 64 for _, w in inputs + outputs)
-    
+
     # Input declarations (exclude clk for random generation)
     input_declarations = []
     random_generators = []
@@ -1013,17 +1116,19 @@ def generate_testbench_cpp(inputs, outputs, cxxrtl_cc, python_module):
     dut_setters = []
     cxxrtl_setters = []
     input_to_string = []  # For JSON conversion
-    
+
     for name, width in inputs:
-        if name.lower() == 'clk':
-            ref_setters.append(f"        ref->clk = clk;")
-            dut_setters.append(f"        dut->clk = clk;")
+        if name.lower() == "clk":
+            ref_setters.append("        ref->clk = clk;")
+            dut_setters.append("        dut->clk = clk;")
             cxxrtl_setters.append(f"        cxxrtl_dut.{cxxrtl_mangle(name)}.set(clk);")
             continue
-        
+
         if width > 64:
             # Wide signal handling
-            decl, rand_code, ref_set, dut_set, cxxrtl_set, to_str = generate_wide_input_code(name, width)
+            decl, rand_code, ref_set, dut_set, cxxrtl_set, to_str = (
+                generate_wide_input_code(name, width)
+            )
             input_declarations.append(decl)
             random_generators.append(rand_code)
             ref_setters.append(ref_set)
@@ -1038,30 +1143,36 @@ def generate_testbench_cpp(inputs, outputs, cxxrtl_cc, python_module):
             random_generators.append(f"        {name} = dist(gen) & {mask};")
             ref_setters.append(f"        ref->{name} = {name};")
             dut_setters.append(f"        dut->{name} = {name};")
-            cxxrtl_setters.append(f"        cxxrtl_dut.{cxxrtl_mangle(name)}.set({name});")
+            cxxrtl_setters.append(
+                f"        cxxrtl_dut.{cxxrtl_mangle(name)}.set({name});"
+            )
             input_to_string.append((name, f"std::to_string({name})"))
-    
+
     # Output to string conversions
     output_to_string = []
     for name, width in outputs:
         if width > 64:
-            output_to_string.append((name, generate_wide_output_to_string(name, width, "ref")))
+            output_to_string.append(
+                (name, generate_wide_output_to_string(name, width, "ref"))
+            )
         else:
             output_to_string.append((name, f"std::to_string(ref->{name})"))
-    
+
     # Python input JSON generation (unused but kept for compatibility)
     python_inputs = []
     for i, (name, _) in enumerate(inputs):
-        comma = ', ' if i < len(inputs) - 1 else ''
+        comma = ", " if i < len(inputs) - 1 else ""
         python_inputs.append(f'        ss << "\\"{name}\\": " << {name} << "{comma}";')
-    
+
     # DUT vs REF comparisons
     dut_checks = []
     for name, width in outputs:
         if width > 64:
-            dut_checks.append(generate_wide_output_comparison(name, width, "dut", "dut_errors", "DUT"))
+            dut_checks.append(
+                generate_wide_output_comparison(name, width, "dut", "dut_errors", "DUT")
+            )
         else:
-            dut_checks.append(f'''
+            dut_checks.append(f"""
         if (ref->{name} != dut->{name}) {{
             if (dut_errors < 10) {{
                 std::cerr << "[DUT MISMATCH] Test " << i << ", {name}: "
@@ -1069,17 +1180,19 @@ def generate_testbench_cpp(inputs, outputs, cxxrtl_cc, python_module):
                           << ", got=" << (uint64_t)dut->{name} << std::endl;
             }}
             dut_errors++;
-        }}''')
-    
+        }}""")
+
     # CXXRTL vs REF comparisons
     cxxrtl_checks = []
     for name, width in outputs:
         if width > 64:
-            cxxrtl_checks.append(generate_wide_cxxrtl_comparison(name, width, "cxxrtl_errors"))
+            cxxrtl_checks.append(
+                generate_wide_cxxrtl_comparison(name, width, "cxxrtl_errors")
+            )
         else:
             mangled = cxxrtl_mangle(name)
             dtype = "uint64_t" if width > 32 else "uint32_t"
-            cxxrtl_checks.append(f'''
+            cxxrtl_checks.append(f"""
         {{
             {dtype} cxxrtl_val = cxxrtl_dut.{mangled}.get<{dtype}>();
             if (({dtype})ref->{name} != cxxrtl_val) {{
@@ -1090,8 +1203,8 @@ def generate_testbench_cpp(inputs, outputs, cxxrtl_cc, python_module):
                 }}
                 cxxrtl_errors++;
             }}
-        }}''')
-    
+        }}""")
+
     # Python vs REF comparisons (now string-based for arbitrary width)
     python_checks = []
     for name, _ in outputs:
@@ -1102,38 +1215,60 @@ def generate_testbench_cpp(inputs, outputs, cxxrtl_cc, python_module):
                 // String comparison for arbitrary width
             }}
         }}''')
-    
+
     # Clock handling - different for combinational vs sequential
     clk_init = "    int clk = 0;" if has_clk else ""
-    
+
     # Detect reset signals: (name, width, is_active_low)
     reset_signals_info = []
     for name, width in inputs:
-        if name.lower() != 'clk' and is_reset_signal(name):
+        if name.lower() != "clk" and is_reset_signal(name):
             reset_signals_info.append((name, width, is_active_low_reset(name)))
-    
+
     # Generate testbench based on combinational vs sequential
     if has_clk:
         # SEQUENTIAL CIRCUIT - proper clock handling
         testbench = generate_sequential_testbench(
-            inputs, outputs, cxxrtl_cc, python_module,
-            input_declarations, random_generators,
-            ref_setters, dut_setters, cxxrtl_setters,
-            python_inputs, dut_checks, cxxrtl_checks, python_checks,
-            input_to_string, output_to_string, has_wide_signals,
-            reset_signals_info
+            inputs,
+            outputs,
+            cxxrtl_cc,
+            python_module,
+            input_declarations,
+            random_generators,
+            ref_setters,
+            dut_setters,
+            cxxrtl_setters,
+            python_inputs,
+            dut_checks,
+            cxxrtl_checks,
+            python_checks,
+            input_to_string,
+            output_to_string,
+            has_wide_signals,
+            reset_signals_info,
         )
     else:
         # COMBINATIONAL CIRCUIT - simple input/output testing
         testbench = generate_combinational_testbench(
-            inputs, outputs, cxxrtl_cc, python_module,
-            input_declarations, random_generators,
-            ref_setters, dut_setters, cxxrtl_setters,
-            python_inputs, dut_checks, cxxrtl_checks, python_checks,
-            input_to_string, output_to_string, has_wide_signals,
-            reset_signals_info
+            inputs,
+            outputs,
+            cxxrtl_cc,
+            python_module,
+            input_declarations,
+            random_generators,
+            ref_setters,
+            dut_setters,
+            cxxrtl_setters,
+            python_inputs,
+            dut_checks,
+            cxxrtl_checks,
+            python_checks,
+            input_to_string,
+            output_to_string,
+            has_wide_signals,
+            reset_signals_info,
         )
-    
+
     return testbench
 
 
@@ -1144,50 +1279,58 @@ def run_verification(ref_sv, dut_sv, cxxrtl_cc, python_file, work_dir="work"):
     # Create work directory
     work_path = Path(work_dir)
     work_path.mkdir(parents=True, exist_ok=True)
-    
+
     # Get basenames
     ref_basename = os.path.basename(ref_sv)
     dut_basename = os.path.basename(dut_sv)
     cxxrtl_basename = os.path.basename(cxxrtl_cc)
     python_basename = os.path.basename(python_file)
     python_module = os.path.splitext(python_basename)[0]
-    
+
     # Copy files to work dir
     for src, dst in [
         (ref_sv, work_path / ref_basename),
         (dut_sv, work_path / dut_basename),
         (cxxrtl_cc, work_path / cxxrtl_basename),
-        (python_file, work_path / python_basename)
+        (python_file, work_path / python_basename),
     ]:
         shutil.copy(src, dst)
-    
+
     # Extract ports from reference
     print(f"Extracting ports from {ref_sv}...")
     inputs, outputs = extract_ports_from_verilog(ref_sv)
     print(f"  Inputs:  {inputs}")
     print(f"  Outputs: {outputs}")
-    
+
     # Generate testbench
     print("\nGenerating testbench.cpp...")
     tb_code = generate_testbench_cpp(inputs, outputs, cxxrtl_basename, python_module)
     tb_path = work_path / "testbench.cpp"
-    with open(tb_path, 'w') as f:
+    with open(tb_path, "w") as f:
         f.write(tb_code)
     print(f"  Generated: {tb_path}")
-    
+
     # Change to work directory
     orig_dir = os.getcwd()
     os.chdir(work_path)
-    
+
     try:
         # Step 1: Compile RefModule with Verilator
         print("\n[1/4] Compiling RefModule with Verilator...")
         verilator_ref = [
-            "verilator", "--cc", ref_basename,
-            "--top-module", "RefModule",
-            "--prefix", "VRefModule",
-            "-Wno-fatal", "-Wno-WIDTH", "-Wno-UNUSED",
-            "-Wno-UNDRIVEN", "-Wno-UNOPTFLAT", "-Wno-DECLFILENAME"
+            "verilator",
+            "--cc",
+            ref_basename,
+            "--top-module",
+            "RefModule",
+            "--prefix",
+            "VRefModule",
+            "-Wno-fatal",
+            "-Wno-WIDTH",
+            "-Wno-UNUSED",
+            "-Wno-UNDRIVEN",
+            "-Wno-UNOPTFLAT",
+            "-Wno-DECLFILENAME",
         ]
         result = subprocess.run(verilator_ref, capture_output=True, text=True)
         if result.returncode != 0:
@@ -1195,20 +1338,31 @@ def run_verification(ref_sv, dut_sv, cxxrtl_cc, python_file, work_dir="work"):
             print(result.stderr)
             # return 1
         print("  RefModule compiled successfully")
-        
+
         # Step 2: Compile TopModule with Verilator
         # NOTE: Don't include dut.cc here - it's #included in testbench.cpp
         print("\n[2/4] Compiling TopModule with Verilator...")
         cxxrtl_include = "/usr/local/share/yosys/include/backends/cxxrtl/runtime"
         verilator_dut = [
-            "verilator", "--cc", dut_basename,
-            "--top-module", "TopModule",
-            "--prefix", "VTopModule",
-            "--exe", "testbench.cpp",  # Don't add dut.cc - it's #included
-            "-CFLAGS", f"-std=c++14 -I{cxxrtl_include} -I.",
-            "-Wno-fatal", "-Wno-WIDTH", "-Wno-UNUSED",
-            "-Wno-UNDRIVEN", "-Wno-UNOPTFLAT", "-Wno-DECLFILENAME",
-            "-o", "sim"
+            "verilator",
+            "--cc",
+            dut_basename,
+            "--top-module",
+            "TopModule",
+            "--prefix",
+            "VTopModule",
+            "--exe",
+            "testbench.cpp",  # Don't add dut.cc - it's #included
+            "-CFLAGS",
+            f"-std=c++14 -I{cxxrtl_include} -I.",
+            "-Wno-fatal",
+            "-Wno-WIDTH",
+            "-Wno-UNUSED",
+            "-Wno-UNDRIVEN",
+            "-Wno-UNOPTFLAT",
+            "-Wno-DECLFILENAME",
+            "-o",
+            "sim",
         ]
         result = subprocess.run(verilator_dut, capture_output=True, text=True)
         if result.returncode != 0:
@@ -1216,10 +1370,10 @@ def run_verification(ref_sv, dut_sv, cxxrtl_cc, python_file, work_dir="work"):
             print(result.stderr)
             # return 1
         print("  TopModule compiled successfully")
-        
+
         # Step 3: Build with make
         print("\n[3/4] Building with make...")
-        
+
         # First build RefModule library
         make_ref = ["make", "-C", "obj_dir", "-f", "VRefModule.mk", "VRefModule__ALL.a"]
         result = subprocess.run(make_ref, capture_output=True, text=True)
@@ -1228,24 +1382,35 @@ def run_verification(ref_sv, dut_sv, cxxrtl_cc, python_file, work_dir="work"):
             print(result.stdout)
             print(result.stderr)
             # return 1
-        
+
         # Build VTopModule objects first (without linking)
-        make_objs = ["make", "-C", "obj_dir", "-f", "VTopModule.mk", "VTopModule__ALL.a", "testbench.o", "verilated.o"]
+        make_objs = [
+            "make",
+            "-C",
+            "obj_dir",
+            "-f",
+            "VTopModule.mk",
+            "VTopModule__ALL.a",
+            "testbench.o",
+            "verilated.o",
+        ]
         result = subprocess.run(make_objs, capture_output=True, text=True)
         if result.returncode != 0:
             print("Make objects failed!")
             print(result.stdout)
             print(result.stderr)
             # return 1
-        
+
         # Link manually with both VTopModule and VRefModule
         print("  Linking...")
         link_cmd = [
-            "g++", "-o", "obj_dir/sim",
+            "g++",
+            "-o",
+            "obj_dir/sim",
             "obj_dir/testbench.o",
             "obj_dir/verilated.o",
             "obj_dir/VTopModule__ALL.a",
-            "obj_dir/VRefModule__ALL.a"
+            "obj_dir/VRefModule__ALL.a",
         ]
         result = subprocess.run(link_cmd, capture_output=True, text=True)
         if result.returncode != 0:
@@ -1254,24 +1419,24 @@ def run_verification(ref_sv, dut_sv, cxxrtl_cc, python_file, work_dir="work"):
             print(result.stderr)
             # return 1
         print("  Build successful")
-        
+
         # Step 4: Run simulation
         print("\n[4/4] Running simulation...")
         sim_path = "./obj_dir/sim"
         if not os.path.exists(sim_path):
             sim_path = "./obj_dir/VTopModule"
-        
+
         result = subprocess.run([sim_path], capture_output=True, text=True, timeout=300)
-        
-        print("\n" + "="*50)
+
+        print("\n" + "=" * 50)
         print("SIMULATION OUTPUT")
-        print("="*50)
+        print("=" * 50)
         print(result.stdout)
         if result.stderr:
             print(result.stderr)
-        
+
         return result.returncode
-        
+
     except subprocess.TimeoutExpired:
         print("Simulation timed out!")
         return 1
@@ -1292,28 +1457,34 @@ Module naming conventions (fixed):
     - dut.sv: module TopModule
     - dut.cc: struct p_TopModule
     - dut.py: function top_module(**kwargs) -> dict
-"""
+""",
     )
-    parser.add_argument("ref_sv", help="Golden reference SystemVerilog (module RefModule)")
+    parser.add_argument(
+        "ref_sv", help="Golden reference SystemVerilog (module RefModule)"
+    )
     parser.add_argument("dut_sv", help="DUT SystemVerilog (module TopModule)")
     parser.add_argument("cxxrtl_cc", help="CXXRTL C++ file (struct p_TopModule)")
     parser.add_argument("python_file", help="Python file (top_module function)")
-    parser.add_argument("-w", "--work-dir", default="work", help="Working directory (default: work)")
-    
+    parser.add_argument(
+        "-w", "--work-dir", default="work", help="Working directory (default: work)"
+    )
+
     args = parser.parse_args()
-    
+
     # Validate files exist
     for path, desc in [
         (args.ref_sv, "Reference SV"),
         (args.dut_sv, "DUT SV"),
         (args.cxxrtl_cc, "CXXRTL CC"),
-        (args.python_file, "Python")
+        (args.python_file, "Python"),
     ]:
         if not os.path.exists(path):
             print(f"Error: {desc} file not found: {path}")
             sys.exit(1)
-    
-    ret = run_verification(args.ref_sv, args.dut_sv, args.cxxrtl_cc, args.python_file, args.work_dir)
+
+    ret = run_verification(
+        args.ref_sv, args.dut_sv, args.cxxrtl_cc, args.python_file, args.work_dir
+    )
     sys.exit(ret)
 
 
