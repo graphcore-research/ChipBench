@@ -2,6 +2,8 @@ import re
 import tempfile
 from pathlib import Path
 
+from post_training_torchtitan.app.grading import FormatReward, FormatRewardResult
+
 from ..async_util import run_with_timeout
 from ..evaluator import EvalResult, Sample
 
@@ -16,51 +18,36 @@ for test_file in _DATASET_DIR.glob("**/*_test.sv"):
     _PROBLEMS[problem_name] = test_file.parent
 
 
+_FORMAT_REWARD = FormatReward()
+
+
+def _score_format(completion: str) -> FormatRewardResult:
+    return _FORMAT_REWARD.score(completion)
+
+
+def _format_details(format_result: FormatRewardResult) -> dict[str, object]:
+    return {
+        "format_passed": format_result.passed,
+        "format_reward": format_result.reward,
+        "format_failure_reason": format_result.failure_reason,
+        "extracted_code": format_result.code,
+    }
+
+
 async def evaluate(sample: Sample) -> EvalResult:
     if sample.problem not in _PROBLEMS:
         raise ValueError(f"Unknown problem: {sample.problem}")
 
-    # Extract code from between [BEGIN] and [DONE] markers if present
-    code = sample.code
-    marker_pairs = [
-        ("[BEGIN]", "[DONE]"),
-        ("[BEGIN]", "[END]"),
-        ("[ BEGIN ]", "[ DONE ]"),
-        ("[ BEGIN ]", "[ END ]"),
-    ]
-    for begin_marker, end_marker in marker_pairs:
-        if begin_marker in code and end_marker in code:
-            code = code.split(begin_marker, 1)[1].split(end_marker, 1)[0].strip()
-            break
-
-    if "```verilog" in code or "```systemverilog" in code or "```" in code:
-        # Find the first verilog code block
-        for fence in ["```verilog", "```systemverilog", "```"]:
-            if fence in code:
-                # Split at the opening fence
-                parts = code.split(fence, 1)
-                if len(parts) >= 2:
-                    # Everything after the opening fence
-                    after_fence = parts[1]
-                    # Remove leading language tag line if present
-                    if after_fence.startswith("\n"):
-                        after_fence = after_fence[1:]
-                    if after_fence.startswith("verilog\n"):
-                        after_fence = after_fence[len("verilog\n") :]
-                    elif after_fence.startswith("systemverilog\n"):
-                        after_fence = after_fence[len("systemverilog\n") :]
-
-                    # Find the closing fence
-                    if "```" in after_fence:
-                        code = after_fence.split("```", 1)[0].strip()
-                        break
-
-    # Fallback: if no markers were used, try extracting module...endmodule blocks
-    # instead of compiling raw full text
-    if "module" in code and "endmodule" in code:
-        module_blocks = re.findall(r"\bmodule\b[\s\S]*?\bendmodule\b", code)
-        if module_blocks:
-            code = "\n\n".join(block.strip() for block in module_blocks).strip()
+    format_result = _score_format(sample.code)
+    code = format_result.code
+    format_details = _format_details(format_result)
+    if not format_result.passed:
+        reason = "format error"
+        log = f"=== format ===\n{format_result.failure_reason}"
+        return EvalResult(
+            passed=False,
+            details={**format_details, "reason": reason, "log": log},
+        )
 
     problem_dir = _PROBLEMS[sample.problem]
     test_file = problem_dir / f"{sample.problem}_test.sv"
@@ -97,14 +84,14 @@ async def evaluate(sample: Sample) -> EvalResult:
         if not completed:
             return EvalResult(
                 passed=False,
-                details={"reason": "compile timeout", "log": "\n\n".join(log_parts)},
+                details={**format_details, "reason": "compile timeout", "log": "\n\n".join(log_parts)},
             )
 
         vvp_file = tmp_dir / "test.vvp"
         if not vvp_file.exists():
             return EvalResult(
                 passed=False,
-                details={"reason": "compile error", "log": "\n\n".join(log_parts)},
+                details={**format_details, "reason": "compile error", "log": "\n\n".join(log_parts)},
             )
 
         # Simulate with vvp (longer timeout since testbench has internal timeout)
@@ -116,7 +103,7 @@ async def evaluate(sample: Sample) -> EvalResult:
         if not completed or "TIMEOUT" in sim_output:
             return EvalResult(
                 passed=False,
-                details={"reason": "simulation timeout", "log": "\n\n".join(log_parts)},
+                details={**format_details, "reason": "simulation timeout", "log": "\n\n".join(log_parts)},
             )
 
         # Parse simulation output
@@ -143,5 +130,5 @@ async def evaluate(sample: Sample) -> EvalResult:
 
         return EvalResult(
             passed=passed,
-            details={"reason": reason, "log": "\n\n".join(log_parts)},
+            details={**format_details, "reason": reason, "log": "\n\n".join(log_parts)},
         )
